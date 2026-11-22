@@ -335,9 +335,19 @@ async function publishWholeCommission(){
    copy.photos=photoPaths;copy.thumbnails=thumbPaths;publicCars.push(copy);
   }
   const blobs=[];
-  for(let i=0;i<files.length;i+=8){status.textContent=`Wysyłanie zdjęć: ${Math.min(i+8,files.length)} z ${files.length} plików…`;const part=await publishRequest(password,{action:'blobs',files:files.slice(i,i+8)});blobs.push(...part.blobs)}
+  // Netlify ma limit wielkości pojedynczego żądania. Dzielimy według rozmiaru,
+  // a nie stałej liczby zdjęć, żeby duże fotografie nie przekroczyły limitu.
+  const MAX_BATCH_CHARS=3_500_000;let batch=[],batchSize=0,uploaded=0;
+  const sendBatch=async()=>{if(!batch.length)return;const part=await publishRequest(password,{action:'blobs',files:batch});blobs.push(...part.blobs);uploaded+=batch.length;status.textContent=`Wysłano zdjęcia: ${uploaded} z ${files.length} plików…`;batch=[];batchSize=0};
+  for(const file of files){
+   if(file.content.length>3_400_000)throw new Error('Jedno zdjęcie jest zbyt duże do bezpiecznego przesłania. Zmniejsz je lub dodaj ponownie w panelu.');
+   const estimated=file.content.length+300;
+   if(batch.length&&batchSize+estimated>MAX_BATCH_CHARS)await sendBatch();
+   batch.push(file);batchSize+=estimated;
+  }
+  await sendBatch();
   status.textContent='Zapisywanie całej publikacji w GitHubie…';
-  const result=await publishRequest(password,{action:'publish',baseCommit:base.commit,baseTree:base.tree,files:blobs,data:{format:'autokomis-public-v1',created:new Date().toISOString(),cars:publicCars,siteSettings:settings}});
+  const result=await publishRequest(password,{action:'publish',baseCommit:base.commit,files:blobs,data:{format:'autokomis-public-v1',created:new Date().toISOString(),cars:publicCars,siteSettings:settings}});
   status.textContent=`Opublikowano ✓ Ogłoszenia: ${result.count}, pliki zdjęć: ${result.photos}. Commit: ${result.commit.slice(0,7)}. Aktualizacja strony może potrwać kilka minut.`;
   alert(`Publikacja zakończona.\nOgłoszenia: ${result.count}\nPliki zdjęć: ${result.photos}\n\nStrona klientów zaktualizuje się po odświeżeniu GitHub Pages.`);
  }catch(error){console.error(error);status.textContent=`Nie udało się opublikować: ${error.message}`;alert(`Błąd publikacji: ${error.message}`)}finally{button.disabled=false}
