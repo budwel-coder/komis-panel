@@ -145,6 +145,7 @@ body.public-mode{background:#0c1424;color:#f4f6fb;font-family:Arial,sans-serif}
     <div class="backup-grid">
       <article class="backup-card"><div class="backup-icon">⇩</div><h3>Eksportuj cały komis</h3><p>Pobierz jeden plik JSON zawierający wszystkie samochody, zdjęcia, opisy i ustawienia strony. Ten plik przeniesiesz na Maca lub Windows.</p><button class="btn primary" id="fullExportBtn">Pobierz pełną kopię</button></article>
       <article class="backup-card"><div class="backup-icon">⇧</div><h3>Importuj cały komis</h3><p>Wczytaj kopię na innym komputerze. Import zastąpi lokalną zawartość panelu danymi z wybranego pliku. Przed importem zostanie utworzona kopia obecnych danych.</p><label class="btn" for="fullImportFile">Wybierz plik kopii</label><input class="hidden" id="fullImportFile" type="file" accept="application/json"></article>
+      <article class="backup-card"><div class="backup-icon">↑</div><h3>Opublikuj cały komis</h3><p>Wyślij wszystkie ogłoszenia, zdjęcia i ustawienia na stronę klientów. Zmiany pojawią się po aktualizacji GitHub Pages.</p><button class="btn primary" id="publishCommissionBtn">Opublikuj cały komis</button><div class="hint" id="publishStatus" aria-live="polite">Publikacja nie zmienia lokalnej kopii.</div></article>
       <article class="backup-card"><div class="backup-icon">⟲</div><h3>Kopia w tej przeglądarce</h3><p>Panel zapisuje lokalne punkty przywracania po zmianach samochodów i ustawień. Przechowuje maksymalnie dwie ostatnie kopie.</p><button class="btn" id="manualBackupBtn">Utwórz kopię teraz</button><button class="btn" id="restoreBackupBtn">Przywróć ostatnią kopię</button><div class="hint" id="backupStatus" aria-live="polite">Brak informacji o kopiach.</div></article>
     </div>
     <div class="backup-warning"><b>Ważne:</b> kopia w przeglądarce jest na tym komputerze i w tym profilu przeglądarki. Do przenoszenia między komputerami używaj pliku „Pobierz pełną kopię”. Zachowaj go również na zewnętrznym dysku lub w bezpiecznym miejscu.</div>
@@ -305,6 +306,43 @@ $('fullExportBtn').onclick=async()=>{const [allCars,rows]=await Promise.all([all
 $('fullImportFile').onchange=async e=>{const file=e.target.files[0];if(!file)return;try{const data=JSON.parse(await file.text());if(!['autokomis-backup-v1','autokomis-backup-v2','autokomis-backup-v3','autokomis-backup-v4','autokomis-backup-v5'].includes(data.format)||!Array.isArray(data.cars))throw Error('format');const photoCount=data.cars.reduce((n,c)=>n+(Array.isArray(c.photos)?c.photos.length:0),0);if(!confirm(`Importować pełną kopię?\n\nSamochody: ${data.cars.length}\nZdjęcia: ${photoCount}\n\nObecne dane na tym komputerze zostaną zastąpione. Przed importem zostanie wykonana kopia lokalna.`))return;await makeSnapshot('Przed importem pełnej kopii');await replaceAllData(data);await loadSettings();await load();await makeSnapshot('Po imporcie pełnej kopii');alert('Gotowe! Zaimportowano samochody, zdjęcia i ustawienia komisu.')}catch(err){console.error(err);alert('Nie udało się zaimportować pliku. Sprawdź, czy to pełna kopia komisu i czy w przeglądarce jest wystarczająco dużo miejsca.')}e.target.value=''};
 $('manualBackupBtn').onclick=async()=>{const ok=await makeSnapshot('Kopia utworzona ręcznie');if(ok)alert('Kopia zapisana w tej przeglądarce. Dla bezpieczeństwa pobierz też pełną kopię na dysk.');};
 $('restoreBackupBtn').onclick=restoreSnapshot;
+
+const PUBLISH_ENDPOINT='https://komis-brat.netlify.app/.netlify/functions/publish-commission';
+function dataUrlBase64(value){if(typeof value!=='string'||!value.startsWith('data:'))throw new Error('Nieprawidłowy format zdjęcia.');const comma=value.indexOf(',');if(comma<0)throw new Error('Nieprawidłowe zdjęcie.');return {mime:value.slice(5,value.indexOf(';')),base64:value.slice(comma+1)}}
+function safePathPart(value){return String(value||'item').replace(/[^a-zA-Z0-9_-]/g,'_').slice(0,80)||'item'}
+async function publishRequest(password,payload){const response=await fetch(PUBLISH_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json','X-Import-Password':password},body:JSON.stringify(payload)});const result=await response.json().catch(()=>({}));if(!response.ok)throw new Error(result.error||`Błąd serwera: ${response.status}`);return result}
+async function publishWholeCommission(){
+ const status=$('publishStatus');const button=$('publishCommissionBtn');
+ const password=prompt('Wpisz hasło publikacji ustawione w zmiennych Netlify (IMPORT_PASSWORD):');if(password===null)return;if(!password.trim()){alert('Hasło nie może być puste.');return}
+ if(!confirm('Opublikować cały komis? Strona klientów otrzyma aktualne ogłoszenia, zdjęcia i ustawienia. Zdjęcia usuniętych ogłoszeń zostaną usunięte z repozytorium.'))return;
+ button.disabled=true;status.textContent='Tworzenie kopii bezpieczeństwa…';
+ try{
+  await makeSnapshot('Przed publikacją komisu');
+  const [allCars,rows]=await Promise.all([allFrom(STORE),allFrom(SETTINGS)]);
+  const settings=Object.fromEntries(rows.map(x=>[x.key,x.value]));
+  const base=await publishRequest(password,{action:'base'});
+  const files=[];const publicCars=[];
+  let photoCount=0;
+  for(const car of allCars){
+   const copy={...car};const id=safePathPart(car.id);const photoPaths=[];const thumbPaths=[];
+   for(let i=0;i<(car.photos||[]).length;i++){
+    const original=dataUrlBase64(car.photos[i]);const ext=original.mime==='image/png'?'png':original.mime==='image/jpeg'?'jpg':'webp';
+    const path=`galeria/${id}/photo-${String(i+1).padStart(2,'0')}.${ext}`;
+    files.push({path,content:original.base64});photoPaths.push(`./${path}`);photoCount++;
+    const thumb=(car.thumbnails||[])[i];
+    if(thumb){const t=dataUrlBase64(thumb);const te=t.mime==='image/png'?'png':t.mime==='image/jpeg'?'jpg':'webp';const tp=`galeria/${id}/thumb-${String(i+1).padStart(2,'0')}.${te}`;files.push({path:tp,content:t.base64});thumbPaths.push(`./${tp}`)}else thumbPaths.push(`./${path}`);
+   }
+   copy.photos=photoPaths;copy.thumbnails=thumbPaths;publicCars.push(copy);
+  }
+  const blobs=[];
+  for(let i=0;i<files.length;i+=8){status.textContent=`Wysyłanie zdjęć: ${Math.min(i+8,files.length)} z ${files.length} plików…`;const part=await publishRequest(password,{action:'blobs',files:files.slice(i,i+8)});blobs.push(...part.blobs)}
+  status.textContent='Zapisywanie całej publikacji w GitHubie…';
+  const result=await publishRequest(password,{action:'publish',baseCommit:base.commit,baseTree:base.tree,files:blobs,data:{format:'autokomis-public-v1',created:new Date().toISOString(),cars:publicCars,siteSettings:settings}});
+  status.textContent=`Opublikowano ✓ Ogłoszenia: ${result.count}, pliki zdjęć: ${result.photos}. Commit: ${result.commit.slice(0,7)}. Aktualizacja strony może potrwać kilka minut.`;
+  alert(`Publikacja zakończona.\nOgłoszenia: ${result.count}\nPliki zdjęć: ${result.photos}\n\nStrona klientów zaktualizuje się po odświeżeniu GitHub Pages.`);
+ }catch(error){console.error(error);status.textContent=`Nie udało się opublikować: ${error.message}`;alert(`Błąd publikacji: ${error.message}`)}finally{button.disabled=false}
+}
+$('publishCommissionBtn').onclick=publishWholeCommission;
 
 function publicRender(){
  const cfg=categoryConfig()[pageCategory]||{};const title=cfg.name||categoryName(pageCategory);document.querySelector('.pub-kicker').textContent=pageCategory==='motorcycles'?'Komis motocyklowy':pageCategory==='other'?'Pozostałe ogłoszenia':'Komis samochodowy';document.querySelector('.pub-section-head h2').textContent=`Dostępne: ${title.toLowerCase()}`;document.querySelector('.pub-section-head p').textContent=pageCategory==='other'?'Przeglądaj ogłoszenia i zapoznaj się z opisem.':'Wybierz interesującą Cię ofertę. Kliknij ogłoszenie, aby zobaczyć szczegóły.';document.querySelector('.pub-hero-actions .pub-primary').textContent=`Przeglądaj ${title.toLowerCase()}`;if(cfg.enabled===false){$('pubInventory').innerHTML='<div class="pub-empty">Ta podstrona jest obecnie wyłączona.</div>';return}
