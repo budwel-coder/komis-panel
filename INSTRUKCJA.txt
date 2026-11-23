@@ -1,0 +1,3 @@
+Podgląd rozdziela dwie wersje: Podgląd zmian (lokalna baza przeglądarki) oraz Strona opublikowana (data/commission.json z GitHub Pages).
+Podmień cztery pliki HTML w repozytorium budwel-coder/komis-panel, gałąź main. Nie zmieniaj repozytorium komis ani funkcji Netlify.
+Uwaga: strona opublikowana wymaga dostępnego pliku https://budwel-coder.github.io/komis/data/commission.json.
