@@ -335,7 +335,7 @@ async function publishWholeCommission(){
    copy.photos=photoPaths;copy.thumbnails=thumbPaths;publicCars.push(copy);
   }
   const blobs=[];
-  for(let i=0;i<files.length;i+=8){status.textContent=`Wysyłanie zdjęć: ${Math.min(i+8,files.length)} z ${files.length} plików…`;const part=await publishRequest(password,{action:'blobs',files:files.slice(i,i+8)});blobs.push(...part.blobs)}
+  for(let i=0;i<files.length;i++){status.textContent=`Wysyłanie zdjęć: ${i+1} z ${files.length} plików…`;const part=await publishRequest(password,{action:'blobs',files:[files[i]]});blobs.push(...part.blobs)}
   status.textContent='Zapisywanie całej publikacji w GitHubie…';
   const result=await publishRequest(password,{action:'publish',baseCommit:base.commit,baseTree:base.tree,files:blobs,data:{format:'autokomis-public-v1',created:new Date().toISOString(),cars:publicCars,siteSettings:settings}});
   status.textContent=`Opublikowano ✓ Ogłoszenia: ${result.count}, pliki zdjęć: ${result.photos}. Commit: ${result.commit.slice(0,7)}. Aktualizacja strony może potrwać kilka minut.`;
